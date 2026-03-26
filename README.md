@@ -4,10 +4,10 @@
 
 This repository contains a modular analytical pipeline for the biogeographic study of three newly identified marine microbial lineages (**DEEPOL1, DEEPOL2, and DEEPOL3**) using large-scale metabarcoding datasets.
 
-## 🔬 Project Overview
+## Project Overview
 This study explores the ecological niches, community assembly, and phylogenetic specialization of these lineages across global ocean basins. The workflow is designed to be **modular**, allowing for independent configuration and execution of specific analyses for each lineage.
 
-## 📊 Key Analytical Modules
+## Key Analytical Modules
 The pipeline (`DEEPOLs_modular.Rmd`) is organized into the following components:
 
 * **Data Integration:** Merging ASV presence/absence matrices with global environmental metadata and size fraction data.
@@ -19,22 +19,15 @@ The pipeline (`DEEPOLs_modular.Rmd`) is organized into the following components:
     * **PERMDISP:** Assessing multivariate dispersion and centroid distances to validate community shifts.
 * **Phylogenetic Niche Traits:** * Mapping habitat specialization (Polarity, Ocean Layer) and niche breadth (Occupancy) onto phylogenetic trees using `ggtree`.
 
-## 📂 Repository Structure
+## Repository Structure
 * `DEEPOLs_modular.Rmd`: The primary R Markdown analysis notebook.
 * `data/`: (Expected) Contains lineage-specific filtered abundance matrices and metadata.
-* `plots/`: Automatically generated output directories containing PDFs and CSVs for each lineage.
+* `results/`: Automatically generated output directories containing PDFs and CSVs for each lineage.
 * `scripts/`: Contains helper functions for niche trait calculations and reporting.
 
-## 🛠 Requirements
+## Requirements
 The analysis is performed in **R** and utilizes the following library suite:
 * **Data Wrangling:** `tidyverse`, `tibble`, `reshape2`, `here`, `conflicted`
 * **Statistics:** `vegan`, `ape`
 * **Visualization:** `ggplot2`, `patchwork`, `ggforce`, `ggtree`, `ggnewscale`
 
----
-
-## 🚀 Usage
-1.  Open the RProject or set your working directory to the repository root.
-2.  Ensure your data is placed in the `data/edited/` directory following the naming convention `[Lineage]_filtered_abundance.csv`.
-3.  Modify the `lineage_cfg` list in the setup chunk of `DEEPOLs_modular.Rmd` to toggle specific analyses or change thresholds.
-4.  Knit the notebook to generate the HTML report and export all figures/tables.
