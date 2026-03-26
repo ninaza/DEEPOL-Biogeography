@@ -1,0 +1,42 @@
+# --- R Specifics ---
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+.Rapp.history
+*-Ex.R
+/conn.log
+config.log
+config.status
+
+# --- Data and Large Files ---
+# It is best practice not to sync large datasets to GitHub.
+# This ignores the entire data folder. 
+# If you want to sync specific small files, use: !data/small_file.csv
+data/
+*.csv
+*.tsv
+*.rds
+*.RData
+*.gz
+*.zip
+
+# --- Output and Plots ---
+# If you prefer to keep your GitHub for code only, ignore the plots folder.
+# Remove the '#' below if you do NOT want to upload your generated PDFs/PNGs.
+# plots/
+
+# --- Operating System Specifics ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- Knitted Reports ---
+# Ignore HTML/PDF versions of the notebook to avoid merge conflicts
+*.html
+*.pdf
+!README.pdf
