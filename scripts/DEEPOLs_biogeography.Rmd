@@ -1,0 +1,1533 @@
+---
+title: "DEEPOL Biogeography Complete Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# ==============================================================================
+#                      DEEPOL Biogeography - Full Setup Chunk
+# ==============================================================================
+#
+# Loads all required packages, sets up directory structure, color and shape 
+# palettes, key configuration parameters, and core helper functions for the 
+# entire notebook. This ensures full reproducibility and clarity.
+# ==============================================================================
+
+# ---- Load libraries ----------------------------------------------------------
+suppressPackageStartupMessages({
+  library(tidyverse)    # Core data wrangling and visualization (dplyr, ggplot2, etc.)
+  library(tibble)       # Enhanced data frames
+  library(ggplot2)      # Explicit ggplot2 load (redundant if tidyverse, but good for clarity)
+  library(vegan)        # Multivariate stats & diversity (ordination, PERMANOVA)
+  library(here)         # File path handling (project-rooted, cross-platform)
+  library(patchwork)    # Advanced plot layout/composition
+  library(conflicted)   # Handling function conflicts (e.g. filter, select)
+  library(ggforce)      # Extra geoms for ggplot2
+  library(reshape2)     # Legacy data reshaping (melt, dcast, etc.)
+  library(ape)          # Phylogenetics tools
+  library(ggtree)       # Phylogenetic tree visualization and annotation
+  library(grid)         # Fine-tuned plot arrangement
+  library(ggnewscale)   # Multiple fill/color scales on one ggplot
+  library(maps)         # World map polygons
+  library(UpSetR) # UpSet plots for set intersections
+  library(purrr)        # Functional programming tools (map, reduce, etc.)
+})
+
+# ---- Resolve dplyr conflicts to avoid ambiguity ------------------------------
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(dplyr::lag)
+conflicts_prefer(dplyr::select)
+
+# ---- Output directory structure ----------------------------------------------
+# Root for all figures/tables
+output_root <- here("results")
+if (!dir.exists(output_root)) dir.create(output_root, recursive = TRUE)
+# Define main lineage codes
+lineages <- c("DEEPOL1", "DEEPOL2", "DEEPOL3")
+# Create and register per-lineage subfolders for outputs
+output_dirs <- setNames(
+  vapply(lineages, function(lin) {
+    dir <- file.path(output_root, lin)
+    if (!dir.exists(dir)) dir.create(dir, recursive = TRUE)
+    dir
+  }, character(1)),
+  lineages
+)
+# Use: file.path(output_dirs["DEEPOL1"], "filename.pdf")
+
+# ---- Color and shape palettes for figures -----------------------------------
+# Colors for each main lineage
+lineage_colours <- c(
+  DEEPOL1 = "cornflowerblue",
+  DEEPOL2 = "mediumpurple3",
+  DEEPOL3 = "mediumseagreen"
+)
+# Custom colors by named ocean for mapping
+ocean_colours <- c(
+  "Arctic Ocean"         = "deepskyblue2",
+  "Southern Ocean"       = "slateblue2",
+  "North Atlantic Ocean" = "seagreen",
+  "South Atlantic Ocean" = "yellowgreen",
+  "North Pacific Ocean"  = "orange2",
+  "South Pacific Ocean"  = "gold2",
+  "Indian Ocean"         = "orchid2",
+  "Mediterranean Region" = "coral"
+)
+# Point shape by ocean layer
+layer_shapes <- c("sunlit" = 16, "dark" = 17)
+# Pre-set ellipse fill palettes for plot facets
+ellipse_fill_palettes <- list(
+  polar_group = c("polar" = "slateblue2", "non-polar" = "coral"),
+  ocean_layer = c("sunlit" = "gold2", "dark" = "deepskyblue2")
+)
+# Standard theme for ordination plots
+ord_theme <- theme_minimal(base_size = 11) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5, size = 10),
+    plot.subtitle    = element_text(hjust = 0.5, colour = "gray50", size = 7),
+    plot.caption     = element_text(hjust = 0.5, colour = "gray50", size = 7),
+    legend.title     = element_text(face = "bold", size = 9),
+    legend.text      = element_text(size = 8),
+    panel.grid.minor = element_blank()
+  )
+# Unified guide formatting for ocean-based plots
+ocean_guides <- guides(
+  colour = guide_legend(override.aes = list(size = 3), ncol = 2),
+  shape  = guide_legend(override.aes = list(size = 3))
+)
+
+# ---- Analysis-wide configuration parameters ---------------------------------
+envfit_p_cutoff <- 0.05                # p-value cutoff for envfit
+specialist_threshold_default <- 0.70   # Default niche specialist threshold
+all_trait_summaries <- list()          # Holds trait summary tables
+
+# Per-lineage analysis settings for modularity
+lineage_cfg <- list(
+  DEEPOL1 = list(
+    run_pcoa = TRUE,
+    run_dbrda = TRUE,
+    run_varpart = TRUE,
+    run_permanova = TRUE,
+    run_permdisp = TRUE,
+    run_permdisp_interaction = TRUE,
+    run_phylo_driver_specialization = TRUE,
+    pcoa_ellipse_mode = "polar_group",
+    varpart_bar_colour = "cornflowerblue",
+    phylo_drivers = c("latitude"),
+    specialist_threshold = 0.70
+  ),
+  DEEPOL2 = list(
+    run_pcoa = TRUE,
+    run_dbrda = TRUE,
+    run_varpart = TRUE,
+    run_permanova = TRUE,
+    run_permdisp = TRUE,
+    run_permdisp_interaction = TRUE,
+    run_phylo_driver_specialization = TRUE,
+    pcoa_ellipse_mode = "polar_group",
+    varpart_bar_colour = "mediumpurple",
+    phylo_drivers = c("latitude", "depth"),
+    specialist_threshold = 0.70
+  ),
+  DEEPOL3 = list(
+    run_pcoa = TRUE,
+    run_dbrda = TRUE,
+    run_varpart = TRUE,
+    run_permanova = TRUE,
+    run_permdisp = TRUE,
+    run_permdisp_interaction = TRUE,
+    run_phylo_driver_specialization = TRUE,
+    pcoa_ellipse_mode = "ocean_layer",
+    varpart_bar_colour = "mediumseagreen",
+    phylo_drivers = c("depth"),
+    specialist_threshold = 0.70
+  )
+)
+
+# Mapping from lineage names to tree file paths
+tree_paths <- list(
+  DEEPOL1 = "/Users/ninpo556/Mirror/PhD/Archaeplastids/PacBio_orphans/cladeA/tree/cladeA_tree.nw",
+  DEEPOL2 = "/Users/ninpo556/Mirror/PhD/Archaeplastids/PacBio_orphans/cladeB/tree/EPA/combined_alignment.fasta.treefile.nwk",
+  DEEPOL3 = "/Users/ninpo556/Mirror/PhD/Archaeplastids/PacBio_orphans/cladeC/tree/cladeC_tree.nw"
+)
+
+# ---- Core helper functions ----
+# -- Count detections by categorical variable (for barplots)
+count_detections <- function(meta, target_var, target_lineage) {
+  meta %>%
+    filter(!is.na(.data[[target_var]])) %>%
+    group_by(category = as.character(.data[[target_var]])) %>%
+    summarise(
+      n_present = sum(.data[[target_lineage]] == 1, na.rm = TRUE),
+      lineage = target_lineage,
+      .groups = "drop"
+    )
+}
+
+# -- Print "section" headers in logs
+msg_header <- function(txt) cat("\n", strrep("=", 80), "\n", txt, "\n", strrep("=", 80), "\n", sep = "")
+
+# -- Convert vector safely to numeric, with NA fallback
+safe_num <- function(x) {
+  if (length(x) == 0 || is.null(x) || all(is.na(x))) return(NA_real_)
+  as.numeric(x[1])
+}
+
+# -- Extract one PERMANOVA result term as a tibble
+extract_permanova_term <- function(adonis_obj, term) {
+  df <- as.data.frame(adonis_obj)
+  if (!term %in% rownames(df)) {
+    return(tibble(term = term, R2 = NA_real_, F = NA_real_, p = NA_real_))
+  }
+  tibble(
+    term = term,
+    R2   = safe_num(df[term, "R2"]),
+    F    = safe_num(df[term, "F"]),
+    p    = safe_num(df[term, "Pr(>F)"])
+  )
+}
+
+# -- Summarize categorical trait data (for trait report tables)
+make_trait_summary <- function(trait_data, lineage, threshold) {
+  pol <- trait_data %>% count(Polarity_class, name = "n_asv") %>%
+    mutate(lineage = lineage, domain = "Polarity") %>%
+    rename(class = Polarity_class)
+  lay <- trait_data %>% count(Layer_class, name = "n_asv") %>%
+    mutate(lineage = lineage, domain = "Layer") %>%
+    rename(class = Layer_class)
+  bind_rows(pol, lay) %>%
+    group_by(lineage, domain) %>%
+    mutate(prop_asv = n_asv / sum(n_asv), threshold = threshold) %>%
+    ungroup()
+}
+
+# -- Prepare matrix and meta for a lineage (used in ordination/analysis)
+prepare_lineage_data <- function(focal_lineage, meta_pa) {
+  msg_header(paste("Preparing data for", focal_lineage))
+  meta_f <- meta_pa %>%
+    filter(.data[[focal_lineage]] == 1) %>%
+    filter(habitat == "Marine") %>%
+    filter(!is.na(ocean) & ocean != "") %>%
+    filter(!is.na(ocean_layer)) %>%
+    filter(size_fraction %in% c("Pico", "Nano", "Micro"))
+  cat(sprintf("Samples after metadata filtering: %d\n", nrow(meta_f)))
+  cat("\n=== Size fraction breakdown ===\n")
+  print(meta_f %>% count(size_fraction))
+  cat("\n=== Ocean breakdown ===\n")
+  print(meta_f %>% count(ocean, sort = TRUE))
+  abundance_file <- here("data", "edited", focal_lineage, paste0(focal_lineage, "_filtered_abundance.csv"))
+  cat(sprintf("\nLoading abundance data: %s\n", abundance_file))
+  abundance <- read.csv(abundance_file, stringsAsFactors = FALSE) %>%
+    filter(nreads > 0)
+  cat(sprintf("Detected samples: %d\n", n_distinct(abundance$sample)))
+  cat(sprintf("ASVs:             %d\n", n_distinct(abundance$amplicon)))
+  mat <- abundance %>%
+    distinct(sample, amplicon) %>%
+    mutate(present = 1L) %>%
+    pivot_wider(names_from = amplicon, values_from = present, values_fill = 0L) %>%
+    column_to_rownames("sample") %>%
+    as.matrix()
+  mat <- mat[, colSums(mat) > 1, drop = FALSE]
+  cat(sprintf("Matrix before sync: %d samples x %d ASVs\n", nrow(mat), ncol(mat)))
+  samples_keep <- meta_f$sample
+  orphans <- setdiff(rownames(mat), samples_keep)
+  missing <- setdiff(samples_keep, rownames(mat))
+  if (length(orphans) > 0) warning(sprintf("%d samples in matrix not in metadata — removing", length(orphans)))
+  if (length(missing) > 0) warning(sprintf("%d samples in metadata not in matrix", length(missing)))
+  mat <- mat[rownames(mat) %in% samples_keep, , drop = FALSE]
+  mat <- mat[, colSums(mat) > 0, drop = FALSE]
+  cat(sprintf("Matrix after sync:  %d samples x %d ASVs\n", nrow(mat), ncol(mat)))
+  if (nrow(mat) < 5 || ncol(mat) < 2) {
+    stop(sprintf("Too few samples (%d) or ASVs (%d) for ordination.", nrow(mat), ncol(mat)))
+  }
+  list(meta_f = meta_f, mat = mat)
+}
+
+# -- Summarize results for final report row per lineage
+build_lineage_report_row <- function(lineage, cfg, dbrda_res, perm_res, n_samples, n_asvs) {
+  add_polar <- extract_permanova_term(perm_res$permanova_add, "polar_group")
+  add_layer <- extract_permanova_term(perm_res$permanova_add, "ocean_layer")
+  int_term <- if (!is.null(perm_res$permanova_int)) {
+    extract_permanova_term(perm_res$permanova_int, "polar_group:ocean_layer")
+  } else {
+    tibble(term = "polar_group:ocean_layer", R2 = NA_real_, F = NA_real_, p = NA_real_)
+  }
+  dbrda_p_overall <- safe_num(dbrda_res$anova_overall$`Pr(>F)`[1])
+  env_only_p      <- safe_num(dbrda_res$anova_envonly$`Pr(>F)`[1])
+  geo_only_p      <- safe_num(dbrda_res$anova_geoonly$`Pr(>F)`[1])
+  env_only_adjR2 <- NA_real_
+  geo_only_adjR2 <- NA_real_
+  shared_adjR2   <- NA_real_
+  resid_adjR2    <- NA_real_
+  if (!is.null(dbrda_res$vp)) {
+    vp_df <- as.data.frame(dbrda_res$vp$part$indfract)
+    vp_df$Group <- c("Environment_only", "Geography_only", "Shared", "Residual")
+    env_only_adjR2 <- safe_num(vp_df$Adj.R.squared[vp_df$Group == "Environment_only"])
+    geo_only_adjR2 <- safe_num(vp_df$Adj.R.squared[vp_df$Group == "Geography_only"])
+    shared_adjR2   <- safe_num(vp_df$Adj.R.squared[vp_df$Group == "Shared"])
+    resid_adjR2    <- safe_num(vp_df$Adj.R.squared[vp_df$Group == "Residual"])
+  }
+  permdisp_layer_p <- if (!is.null(perm_res$permtest_layer)) safe_num(perm_res$permtest_layer$tab[1, "Pr(>F)"]) else NA_real_
+  permdisp_polar_p <- if (!is.null(perm_res$permtest_polar)) safe_num(perm_res$permtest_polar$tab[1, "Pr(>F)"]) else NA_real_
+  tibble(
+    lineage = lineage,
+    n_samples = n_samples,
+    n_asvs = n_asvs,
+    permanova_add_polar_R2 = add_polar$R2,
+    permanova_add_polar_F  = add_polar$F,
+    permanova_add_polar_p  = add_polar$p,
+    permanova_add_layer_R2 = add_layer$R2,
+    permanova_add_layer_F  = add_layer$F,
+    permanova_add_layer_p  = add_layer$p,
+    permanova_int_R2 = int_term$R2,
+    permanova_int_F  = int_term$F,
+    permanova_int_p  = int_term$p,
+    permdisp_layer_p = permdisp_layer_p,
+    permdisp_polar_p = permdisp_polar_p,
+    dbrda_overall_p = dbrda_p_overall,
+    env_only_p      = env_only_p,
+    geo_only_p      = geo_only_p,
+    varpart_env_only_adjR2 = env_only_adjR2,
+    varpart_geo_only_adjR2 = geo_only_adjR2,
+    varpart_shared_adjR2   = shared_adjR2,
+    varpart_residual_adjR2 = resid_adjR2,
+    ran_permdisp_interaction = isTRUE(cfg$run_permdisp_interaction)
+  )
+}
+
+# ---- Record session info for full reproducibility ----
+cat("Notebook session started on: ", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "\n")
+sessionInfo()
+```
+
+## 1. Data Loading
+
+```{r data-load}
+# ==============================================================================
+#                  DEEPOL Biogeography - Data Loading Chunk
+# ==============================================================================
+
+# ---- 1. Sample metadata ------------------------------------------------------
+metadata_file <- here("data", "edited", "meta_with_presence_absence.csv")
+message("[Data] Loading sample metadata:\n    ", metadata_file)
+metadata_all <- read.csv(
+  metadata_file,
+  header = TRUE,
+  stringsAsFactors = FALSE
+)
+cat("[OK] Loaded metadata: ", nrow(metadata_all), " rows\n")
+
+# ---- 2. World map polygons ---------------------------------------------------
+world_map <- map_data("world")
+cat("[OK] Loaded world map polygons: ", dplyr::n_distinct(world_map$region), " regions\n")
+
+# ---- 3. Per-lineage abundance tables -----------------------------------------
+abundance_tables <- lapply(lineages, function(lin) {
+  file <- here("data", "edited", lin, paste0(lin, "_filtered_abundance.csv"))
+  message("[Data] Loading abundance table for ", lin, ":\n    ", file)
+  if (!file.exists(file)) stop("Abundance data not found: ", file)
+  dat <- read.csv(file, stringsAsFactors = FALSE)
+  cat(sprintf("[OK] %s: %d entries, %d unique samples\n", lin, nrow(dat), dplyr::n_distinct(dat$sample)))
+  return(dat)
+})
+names(abundance_tables) <- lineages
+
+cat("[DONE] All data loaded! Abundance tables available as 'abundance_tables[[lineage]]'.\n")
+```
+
+## 2. Unfiltered Visualizations
+
+### 2.1 Abundance Maps
+
+```{r abundance-maps, fig.width=11, fig.height=5, warning=FALSE, message=FALSE}
+# ==============================================================================
+#                 DEEPOL Biogeography - Global Abundance Maps (shared size scale)
+# ==============================================================================
+
+# -- Helper: Select relevant metadata columns for mapping --
+sample_coords <- metadata_all %>%
+  select(sample, longitude, latitude) %>%
+  mutate(longitude = as.numeric(longitude),
+         latitude = as.numeric(latitude)) %>%
+  filter(!is.na(longitude) & !is.na(latitude))
+
+# 1. Gather all nonzero abundances for fixed scale across all lineages
+all_abundances <- unlist(lapply(abundance_tables, function(tab) tab$rel_abundance_pct))
+nonzero_abundances <- all_abundances[all_abundances > 0 & !is.na(all_abundances)]
+global_min <- min(nonzero_abundances)
+global_max <- max(nonzero_abundances)
+
+message(sprintf("[INFO] Global relative abundance range: %.4f%% – %.4f%%", global_min, global_max))
+
+legend_breaks <- c(0.005, 0.05, 0.5, 5)
+legend_labels <- c("0.005%", "0.05%", "0.5%", "5%")
+
+# 2. Map plotting function
+create_abundance_map <- function(lineage, meta, abund, world_map, lineage_colours, outdir, scale_min, scale_max, legend_breaks, legend_labels) {
+  this_abund <- abund %>%
+    filter(!is.na(sample)) %>%
+    group_by(sample) %>%
+    summarise(rel_abundance_pct = sum(rel_abundance_pct, na.rm=TRUE), .groups = "drop")
+  plot_df <- sample_coords %>%
+    left_join(this_abund, by = "sample") %>%
+    mutate(marker = if_else(is.na(rel_abundance_pct), "absent", "present"))
+
+  plot_df$rel_abundance_pct <- pmax(0, as.numeric(plot_df$rel_abundance_pct))
+
+  legend_title <- "Rel. abundance (%)"
+
+  p <- ggplot() +
+    geom_polygon(
+      data = world_map,
+      aes(x = long, y = lat, group = group),
+      colour  = "gray70",
+      fill    = "gray90",
+      linewidth = 0.3
+    ) +
+    geom_point(
+      data  = plot_df %>% filter(marker == "absent"),
+      aes(x = longitude, y = latitude),
+      shape  = 4,
+      size   = 1,
+      colour = "gray60",
+      alpha  = 0.4
+    ) +
+    geom_point(
+      data  = plot_df %>% filter(marker == "present"),
+      aes(x = longitude, y = latitude, size = rel_abundance_pct, colour = rel_abundance_pct),
+      alpha   = 0.75
+    ) +
+    scale_size_continuous(
+      name   = legend_title,
+      range  = c(2, 12),
+      limits = c(scale_min, scale_max),
+      breaks = legend_breaks,
+      labels = legend_labels
+    ) +
+    scale_colour_viridis_c(
+      name   = legend_title,
+      option = "viridis",
+      limits = c(scale_min, scale_max),
+      breaks = legend_breaks,
+      labels = legend_labels
+    ) +
+    guides(
+      size   = guide_legend(title = legend_title),
+      colour = guide_legend(title = legend_title)
+    ) +
+    scale_y_continuous(limits = c(-90,90),  breaks = seq(-90,90,by=30)) +
+    scale_x_continuous(limits = c(-180,180), breaks = seq(-180,180,by=60)) +
+    coord_quickmap() +
+    theme_minimal() +
+    labs(
+      x = NULL, y = NULL,
+      title    = paste(lineage, "Global Distribution"),
+      subtitle = "Unfiltered abundance data (size/color = relative abundance; fixed scale)"
+    )
+
+  print(p)
+  out_path <- file.path(outdir, paste0(lineage, "_global_abundance_map.pdf"))
+  ggsave(out_path, plot=p, dpi=300, width=11, height=6, bg="white", device="pdf")
+  message("[Map saved] ", out_path)
+}
+
+for (lin in lineages) {
+  create_abundance_map(
+    lineage = lin,
+    meta = metadata_all,
+    abund = abundance_tables[[lin]],
+    world_map = world_map,
+    lineage_colours = lineage_colours,
+    outdir = output_dirs[[lin]],
+    scale_min = global_min,
+    scale_max = global_max,
+    legend_breaks = legend_breaks,
+    legend_labels = legend_labels
+  )
+}
+```
+### 2.2 Abundance summary statistics
+
+```{r}
+# ==============================================================================
+# DEEPOL Biogeography - Lineage abundance summary statistics (per-sample first)
+# ==============================================================================
+
+abundance_summary <- purrr::map_dfr(lineages, function(lin) {
+  tab <- abundance_tables[[lin]]
+
+  # 1) collapse to one value per sample (sum of all entries for that lineage/sample)
+  per_sample <- tab %>%
+    filter(!is.na(sample), !is.na(rel_abundance_pct)) %>%
+    group_by(sample) %>%
+    summarise(rel_abundance_pct = sum(rel_abundance_pct, na.rm = TRUE), .groups = "drop")
+
+  vals <- per_sample$rel_abundance_pct
+
+  tibble(
+    lineage = lin,
+    n_samples_with_values       = length(vals),
+    mean_rel_abundance_pct      = mean(vals),
+    median_rel_abundance_pct    = median(vals),
+    sd_rel_abundance_pct        = sd(vals),
+    min_rel_abundance_pct       = min(vals),
+    max_rel_abundance_pct       = max(vals)
+  )
+})
+
+# Show in notebook
+print(abundance_summary)
+
+# Save CSV in results root
+summary_outfile <- file.path(output_root, "DEEPOL_lineage_abundance_summary_per_sample.csv")
+write.csv(abundance_summary, summary_outfile, row.names = FALSE)
+
+message("[Summary saved] ", summary_outfile)
+```
+
+
+### 2.3 Occurrence by Habitat / Size Fraction
+
+```{r occurrence-barplots, fig.width=9, fig.height=5, warning=FALSE, message=FALSE}
+# ==============================================================================
+#         DEEPOL Biogeography - Occurrence Barplots (Habitat & Size Fraction)
+# ==============================================================================
+#
+# For each lineage, plot:
+#   - Samples where lineage was detected in each habitat (bar overlay: total vs. present)
+#   - Occurrences across size fractions (count of detections per category)
+# Outputs are saved as PDFs in each lineage's output directory.
+# ==============================================================================
+
+# Helper: Plot and save barplot of detections by a categorical variable
+plot_occurrence_bar <- function(meta, lineage, target_var, lineage_colours, outdir) {
+  # Occurrence stats by category
+  occ_stats <- meta %>%
+    filter(!is.na(.data[[target_var]])) %>%
+    group_by(category = as.character(.data[[target_var]])) %>%
+    summarise(
+      total_samples = n(),
+      n_present = sum(.data[[lineage]] == 1, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      pct = (n_present / total_samples) * 100,
+      category = factor(category, levels = category[order(-total_samples)])
+    )
+
+  # Plot: total as grey, present as colored overlay
+  p <- ggplot(occ_stats, aes(x = category)) +
+    geom_col(aes(y = total_samples), fill = "grey90", colour = "grey80") +
+    geom_col(aes(y = n_present), fill = lineage_colours[lineage]) +
+    geom_text(
+      aes(y = n_present, label = ifelse(n_present > 0, paste0(n_present, " (", round(pct, 1), "%)"), "")),
+      vjust = -0.5, size = 3, fontface = "bold"
+    ) +
+    labs(
+      x = NULL, y = "Number of samples (Detected vs Total)",
+      title = paste(lineage, "Occurrence by", gsub("_"," ",target_var)),
+      subtitle = "Coloured bar = Detections | Grey bar = Total Samples"
+    ) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.text.x = element_text(angle = 35, hjust = 1),
+      panel.grid.major.x = element_blank(),
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(hjust = 0.5, size = 10)
+    )
+
+  print(p)
+
+  # Save
+  out_file <- file.path(outdir, paste0(lineage, "_", target_var, "_occurrence.pdf"))
+  ggsave(out_file, plot = p, width = 8, height = 5, bg = "white")
+  message("[OK] Saved: ", out_file)
+}
+
+for (lin in lineages) {
+  # By habitat
+  plot_occurrence_bar(metadata_all, lin, "habitat", lineage_colours, output_dirs[[lin]])
+  # By size fraction
+  plot_occurrence_bar(metadata_all, lin, "size_fraction", lineage_colours, output_dirs[[lin]])
+}
+```
+
+## 3. Filtering for Downstream Analysis
+
+```{r general-filtering, warning=FALSE, message=FALSE}
+# ==============================================================================
+#                DEEPOL Biogeography - Lineage-wise Filtering via Helper
+# ==============================================================================
+
+# This block uses the prepare_lineage_data() helper to generate per-lineage filtered
+# metadata and abundance (sample x ASV) matrices, for all downstream analyses.
+
+filtered_data <- lapply(lineages, function(lin) {
+  prepare_lineage_data(lin, metadata_all)
+})
+names(filtered_data) <- lineages
+
+# Now for each lineage:
+#    filtered_data[["DEEPOL1"]]$meta_f      # filtered meta for DEEPOL1
+#    filtered_data[["DEEPOL1"]]$mat         # filtered PA matrix for DEEPOL1
+
+# Print summary for each lineage
+for(lin in lineages) {
+  cat(sprintf("\n[%s] %d filtered samples, %d ASVs in matrix\n", lin,
+              nrow(filtered_data[[lin]]$meta_f),
+              ncol(filtered_data[[lin]]$mat)))
+}
+```
+
+## 4. Downstream Analyses
+
+```{r size-upset-per-lineage, warning=FALSE, message=FALSE}
+# ==============================================================================
+#      DEEPOL Biogeography - UpSet Plot: ASV (Taxon) Presence per Size Fraction
+# ==============================================================================
+#
+# For each lineage, create an UpSet plot of ASV (taxon) presence across size fractions.
+# Each set: taxa present in at least one sample of that size fraction for this lineage.
+# Plots are saved as PDFs in each lineage's output directory.
+# ==============================================================================
+
+for (lin in lineages) {
+  # 1. Extract synchronized sample x ASV matrix and aligned metadata
+  mat <- filtered_data[[lin]]$mat           # samples x ASVs (0/1)
+  meta_aligned <- filtered_data[[lin]]$meta_f # corresponding metadata rows
+
+  # Check for sufficient samples
+  if (nrow(mat) == 0 || ncol(mat) == 0) {
+    warning(sprintf("[%s] No data after filtering, skipping UpSet plot.", lin))
+    next
+  }
+
+  # 2. Summarise: for each Size, which ASVs are present in at least one sample
+  taxa_presence_by_size <- as.data.frame(mat) %>%
+    mutate(Size = meta_aligned$size_fraction) %>%
+    group_by(Size) %>%
+    summarise(across(everything(), max)) %>% # 1 if present in at least one sample
+    pivot_longer(-Size, names_to = "Taxon", values_to = "Present") %>%
+    filter(Present > 0)
+  
+  # 3. Convert to list format for UpSetR: names = size fractions, values = ASV vectors
+  upset_list <- split(taxa_presence_by_size$Taxon, taxa_presence_by_size$Size)
+
+  if (length(upset_list) < 2 || all(sapply(upset_list, length) == 0)) {
+    warning(sprintf("[%s] Less than 2 non-empty size sets, skipping UpSet plot.", lin))
+    next
+  }
+
+  # 4. Save UpSet plot to PDF in the right directory (landscape aspect)
+  png_file <- file.path(output_dirs[[lin]], paste0(lin, "_size_upset.png"))
+  png(png_file, width = 10, height = 7, res = 300)
+  upset(
+    fromList(upset_list),
+    order.by = "freq",
+    main.bar.color = "#2c3e50",
+    sets.bar.color = "#e74c3c",
+    text.scale = 1.2
+  )
+  dev.off()
+  message(sprintf("[OK] UpSet plot saved: %s", pdf_file))
+}
+```
+
+## 5. Principal Coordinates Analysis (PCoA) & Envfit
+
+```{r pcoa-envfit, fig.width=18, fig.height=10, warning=FALSE, message=FALSE}
+# ==============================================================================
+#                  DEEPOL Biogeography - PCoA & Envfit Analysis
+# ==============================================================================
+#
+# For each lineage (if enabled in lineage_cfg):
+#   - Calculates Jaccard distances and performs PCoA on the filtered matrix.
+#   - Fits environmental/geographic variables (envfit).
+#   - Extracts significant vectors based on the envfit_p_cutoff.
+#   - Plots PCoA with points (colored by ocean basin, shaped by layer),
+#     optional group ellipses, and significant envfit vectors.
+# Outputs are saved as PDFs/CSVs in each lineage's respective output directory.
+# ==============================================================================
+
+for (lin in lineages) {
+  cfg <- lineage_cfg[[lin]]
+  
+  # Check if PCoA is requested for this lineage
+  if (!isTRUE(cfg$run_pcoa)) {
+    message(sprintf("[SKIP] PCoA disabled in config for %s.", lin))
+    next
+  }
+  
+  msg_header(paste(lin, "- PCoA & envfit"))
+  
+  # Extract pre-filtered data
+  mat <- filtered_data[[lin]]$mat
+  meta_f <- filtered_data[[lin]]$meta_f
+  outdir <- output_dirs[[lin]]
+  
+  # Ensure we have enough data to run ordination
+  if (nrow(mat) < 3) {
+    warning(sprintf("[%s] Too few samples for PCoA. Skipping.", lin))
+    next
+  }
+  
+  # ---- 1. Calculate Distances and PCoA ---------------------------------------
+  dist_mat <- vegdist(mat, method = "jaccard", binary = TRUE)
+  pcoa <- cmdscale(dist_mat, k = 2, eig = TRUE)
+  
+  # ---- 2. Format scores and calculate variance explained ---------------------
+  pcoa_scores <- as_tibble(pcoa$points, rownames = "sample") %>%
+    left_join(meta_f, by = "sample") %>%
+    mutate(polar_group = ifelse(ocean %in% c("Arctic Ocean", "Southern Ocean"), "polar", "non-polar"))
+  
+  eig_pos_sum <- sum(pcoa$eig[pcoa$eig > 0], na.rm = TRUE)
+  var_explained <- if (eig_pos_sum > 0) round(100 * pcoa$eig / eig_pos_sum, 1) else c(NA_real_, NA_real_)
+  
+  # ---- 3. Envfit: Fit environmental variables --------------------------------
+  vars <- c("temperature", "depth", "salinity", "latitude", "longitude")
+  df_env <- pcoa_scores %>%
+    select(sample, V1, V2, all_of(vars)) %>%
+    drop_na(all_of(vars))
+  
+  fit <- envfit(df_env[, c("V1", "V2")], df_env[, vars], permutations = 999)
+  
+  # Extract significant vectors
+  ef <- as.data.frame(scores(fit, "vectors"))
+  ef$variable <- rownames(ef)
+  ef$pval <- fit$vectors$pvals
+  ef$r2   <- fit$vectors$r
+  
+  ef_sig <- ef %>%
+    filter(pval <= envfit_p_cutoff) %>%
+    mutate(label = paste0(variable, " (R²=", round(r2, 2), ", p=", signif(pval, 2), ")"))
+  
+  # Save significant vectors to CSV
+  sig_tbl_path <- file.path(outdir, paste0(lin, "_PCoA_envfit_significant_vectors.csv"))
+  write.csv(ef_sig, sig_tbl_path, row.names = FALSE)
+  message("[OK] Saved envfit vectors: ", sig_tbl_path)
+  
+  # ---- 4. Plotting -----------------------------------------------------------
+  ellipse_mode <- if (!is.null(cfg$pcoa_ellipse_mode)) cfg$pcoa_ellipse_mode else "none"
+  p <- ggplot(pcoa_scores, aes(x = V1, y = V2))
+  
+  # Add ellipses based on configuration
+  if (ellipse_mode %in% c("polar_group", "ocean_layer")) {
+    grp <- ellipse_mode
+    group_counts <- table(pcoa_scores[[grp]])
+    valid_levels <- names(group_counts[group_counts >= 3])
+    
+    if (length(valid_levels) >= 1) {
+      ell_df <- pcoa_scores %>% filter(.data[[grp]] %in% valid_levels)
+      
+      p <- p +
+        stat_ellipse(
+          data = ell_df,
+          aes(x = V1, y = V2, group = .data[[grp]], fill = .data[[grp]]),
+          geom = "polygon",
+          type = "t",
+          level = 0.95,
+          alpha = 0.25,
+          linewidth = 0.5,
+          colour = NA
+        ) +
+        scale_fill_manual(
+          values = ellipse_fill_palettes[[grp]],
+          name = ifelse(grp == "polar_group", "Polar group ellipse", "Ocean layer ellipse"),
+          drop = TRUE
+        )
+    } else {
+      message(sprintf("[%s] Skipping %s ellipses (insufficient group sizes).", lin, grp))
+    }
+  }
+  
+  # Add scatter points and styling
+  p <- p +
+    geom_point(aes(colour = ocean, shape = ocean_layer), size = 2, alpha = 0.85) +
+    scale_colour_manual(values = ocean_colours, name = "Ocean basin") +
+    scale_shape_manual(
+      values = layer_shapes,
+      name = "Ocean layer",
+      labels = c("sunlit" = "Sunlit", "dark" = "Dark"),
+      na.translate = FALSE
+    ) +
+    labs(
+      title = paste0(lin, " — PCoA (Jaccard distance)"),
+      subtitle = "Ellipses by polar group/ocean layer + significant envfit vectors",
+      x = paste0("PCoA1 (", var_explained[1], "%)"),
+      y = paste0("PCoA2 (", var_explained[2], "%)")
+    ) +
+    ocean_guides + ord_theme +
+    theme(
+      legend.position = "bottom",
+      plot.title = element_text(size = 14),
+      plot.subtitle = element_text(size = 10)
+    )
+  
+  # Overlay significant envfit vectors if any exist
+  if (nrow(ef_sig) > 0) {
+    p <- p +
+      geom_segment(
+        data = ef_sig,
+        aes(x = 0, y = 0, xend = V1, yend = V2),
+        inherit.aes = FALSE,
+        arrow = arrow(length = unit(0.25, "cm")),
+        colour = "grey15",
+        linewidth = 0.8
+      ) +
+      geom_text(
+        data = ef_sig,
+        aes(x = V1, y = V2, label = label),
+        inherit.aes = FALSE,
+        size = 4,
+        vjust = -0.6
+      )
+  } else {
+    message(sprintf("[%s] No significant envfit vectors at p <= %s", lin, envfit_p_cutoff))
+  }
+  
+  print(p)
+  
+  # Save the finalized plot
+  out_pdf <- file.path(outdir, paste0(lin, "_PCoA_envfit_vectors.pdf"))
+  ggsave(out_pdf, plot = p, width = 20, height = 15, bg = "white")
+  message("[OK] Saved PCoA plot: ", out_pdf)
+}
+```
+
+## 6. Distance-based Redundancy Analysis (dbRDA) & Variation Partitioning
+
+```{r dbrda-varpart, fig.width=12, fig.height=8, warning=FALSE, message=FALSE}
+# ==============================================================================
+#             DEEPOL Biogeography - dbRDA & Variation Partitioning
+# ==============================================================================
+#
+# For each lineage (if enabled in lineage_cfg):
+#   - Aligns the matrix and metadata, filtering for complete cases of env variables.
+#   - Runs a partial dbRDA (Jaccard) conditioned on spatial coordinates.
+#   - Extracts ANOVA overall and by term, plus envfit vectors for the dbRDA axes.
+#   - Plots and saves the dbRDA ordination.
+#   - If varpart is enabled, runs variation partitioning (Environment vs Geography),
+#     plots the adjusted R-squared fractions, and saves the plot.
+#   - Stores statistical results in `dbrda_results` for the final summary table.
+# ==============================================================================
+
+# Initialize a list to hold results for the final report builder
+dbrda_results <- list()
+
+for (lin in lineages) {
+  cfg <- lineage_cfg[[lin]]
+  
+  # Check if either dbRDA or varpart is requested
+  if (!isTRUE(cfg$run_dbrda) && !isTRUE(cfg$run_varpart)) {
+    message(sprintf("[SKIP] dbRDA and varpart disabled in config for %s.", lin))
+    next
+  }
+  
+  msg_header(paste(lin, "- dbRDA & Variation Partitioning"))
+  
+  # Extract pre-filtered data
+  mat <- filtered_data[[lin]]$mat
+  meta_f <- filtered_data[[lin]]$meta_f
+  outdir <- output_dirs[[lin]]
+  
+  # ---- 1. Data Synchronization & Complete Cases Filtering --------------------
+  common_samples <- intersect(rownames(mat), meta_f$sample)
+  mat_clean <- mat[common_samples, , drop = FALSE]
+  
+  meta_clean <- meta_f %>%
+    filter(sample %in% common_samples) %>%
+    arrange(match(sample, common_samples))
+  
+  # Keep only samples with complete environmental and geographic data
+  vars_needed <- c("depth", "temperature", "salinity", "latitude", "longitude")
+  complete_rows <- complete.cases(meta_clean[, vars_needed])
+  
+  meta_db <- meta_clean[complete_rows, , drop = FALSE]
+  mat_db  <- mat_clean[complete_rows, , drop = FALSE]
+  
+  rownames(meta_db) <- meta_db$sample
+  stopifnot(identical(rownames(mat_db), meta_db$sample))
+  
+  if (nrow(mat_db) < 5) {
+    warning(sprintf("[%s] Too few complete cases (%d) for dbRDA. Skipping.", lin, nrow(mat_db)))
+    next
+  }
+  
+  # ---- 2. Partial dbRDA & ANOVA ----------------------------------------------
+  dbrda_partial <- capscale(
+    mat_db ~ depth + temperature + salinity + Condition(latitude + longitude),
+    data = meta_db, distance = "jaccard", binary = TRUE
+  )
+  
+  anova_overall <- anova(dbrda_partial)
+  anova_terms   <- anova(dbrda_partial, by = "term")
+  
+  cat("\nANOVA (overall):\n")
+  print(anova_overall)
+  cat("\nANOVA (by term):\n")
+  print(anova_terms)
+  
+  # Extract sites for plotting
+  db_sites <- as.data.frame(scores(dbrda_partial, display = "sites", choices = 1:2))
+  db_sites$sample <- rownames(db_sites)
+  colnames(db_sites)[1:2] <- c("CAP1", "CAP2")
+  db_sites <- db_sites %>% left_join(meta_db, by = "sample")
+  
+  # ---- 3. Envfit on dbRDA axes -----------------------------------------------
+  fit_dbrda <- envfit(
+    dbrda_partial,
+    meta_db[, c("temperature", "salinity", "depth")],
+    permutations = 999
+  )
+  
+  db_env <- as.data.frame(scores(fit_dbrda, display = "vectors"))
+  db_env$variable <- rownames(db_env)
+  db_env$r2 <- fit_dbrda$vectors$r
+  db_env$pval <- fit_dbrda$vectors$pvals
+  
+  db_env_sig <- db_env %>%
+    filter(pval <= envfit_p_cutoff) %>%
+    mutate(label = paste0(variable, " (R²=", round(r2, 2), ", p=", signif(pval, 2), ")"))
+  
+  sig_tbl_path <- file.path(outdir, paste0(lin, "_dbRDA_envfit_significant_vectors.csv"))
+  write.csv(db_env_sig, sig_tbl_path, row.names = FALSE)
+  
+  # ---- 4. Plot dbRDA ---------------------------------------------------------
+  p_dbrda <- ggplot(db_sites, aes(x = CAP1, y = CAP2, colour = ocean, shape = ocean_layer)) +
+    geom_point(size = 2.2, alpha = 0.9) +
+    scale_colour_manual(values = ocean_colours, name = "Ocean basin") +
+    scale_shape_manual(
+      values = layer_shapes, name = "Ocean layer",
+      labels = c("sunlit" = "Sunlit", "dark" = "Dark"),
+      na.translate = FALSE
+    ) +
+    labs(
+      title = paste0(lin, " — Partial dbRDA (Jaccard distance)"),
+      subtitle = "Conditioned on latitude + longitude",
+      x = "dbRDA1", y = "dbRDA2"
+    ) +
+    ocean_guides + ord_theme +
+    theme(
+      legend.position = "bottom", 
+      plot.title = element_text(size = 14), 
+      plot.subtitle = element_text(size = 10)
+    )
+  
+  if (nrow(db_env_sig) > 0) {
+    p_dbrda <- p_dbrda +
+      geom_segment(
+        data = db_env_sig, inherit.aes = FALSE,
+        aes(x = 0, y = 0, xend = CAP1, yend = CAP2),
+        arrow = arrow(length = unit(0.25, "cm")),
+        colour = "black", linewidth = 0.6
+      ) +
+      geom_text(
+        data = db_env_sig, inherit.aes = FALSE,
+        aes(x = CAP1, y = CAP2, label = label),
+        size = 4, vjust = -0.7
+      )
+  } else {
+    message(sprintf("[%s] No significant dbRDA envfit vectors at p <= %s", lin, envfit_p_cutoff))
+  }
+  
+  print(p_dbrda)
+  out_dbrda <- file.path(outdir, paste0(lin, "_dbRDA_envfit_vectors.pdf"))
+  ggsave(out_dbrda, plot = p_dbrda, width = 10, height = 8, bg = "white")
+  message("[OK] Saved dbRDA plot: ", out_dbrda)
+  
+  # ---- 5. Variation Partitioning (varpart) -----------------------------------
+  vp <- NULL
+  if (isTRUE(cfg$run_varpart)) {
+    ENV <- meta_db[, c("depth", "temperature", "salinity")] %>% mutate_all(as.numeric)
+    GEO <- meta_db[, c("latitude", "longitude")] %>% mutate_all(as.numeric)
+    
+    vp <- varpart(mat_db, ENV, GEO)
+    print(vp)
+    
+    vp_df <- as.data.frame(vp$part$indfract)
+    vp_df$Group <- c("Environment_only", "Geography_only", "Shared", "Residual")
+    
+    bar_col <- if (!is.null(cfg$varpart_bar_colour)) cfg$varpart_bar_colour else "mediumseagreen"
+    
+    p_vp <- ggplot(vp_df, aes(x = Group, y = Adj.R.squared, fill = Group)) +
+      geom_col(width = 0.7, alpha = 0.9, fill = bar_col) +
+      labs(
+        title = paste0(lin, " — Variation Partitioning of ASV Composition"),
+        x = "", y = "Adjusted R²"
+      ) +
+      theme_minimal() +
+      theme(
+        legend.position = "none",
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14, face = "bold"),
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5)
+      )
+    
+    print(p_vp)
+    out_vp <- file.path(outdir, paste0(lin, "_variation_partitioning.pdf"))
+    ggsave(out_vp, plot = p_vp, width = 8, height = 6, bg = "white")
+    message("[OK] Saved varpart plot: ", out_vp)
+  }
+  
+  # ---- 6. Marginal ANOVAs for report table -----------------------------------
+  env_only <- capscale(
+    mat_db ~ depth + temperature + salinity + Condition(latitude + longitude),
+    data = meta_db, distance = "jaccard", binary = TRUE
+  )
+  geo_only <- capscale(
+    mat_db ~ latitude + longitude + Condition(depth + temperature + salinity),
+    data = meta_db, distance = "jaccard", binary = TRUE
+  )
+  
+  anova_envonly <- anova(env_only)
+  anova_geoonly <- anova(geo_only)
+  
+  # Store results in the global list for later use
+  dbrda_results[[lin]] <- list(
+    mat_db        = mat_db,
+    meta_db       = meta_db,
+    dbrda_partial = dbrda_partial,
+    vp            = vp,
+    anova_overall = anova_overall,
+    anova_terms   = anova_terms,
+    anova_envonly = anova_envonly,
+    anova_geoonly = anova_geoonly
+  )
+}
+```
+
+## 7. PERMANOVA & PERMDISP (Community Dispersion & Significance)
+
+```{r permanova-permdisp, fig.width=12, fig.height=6, warning=FALSE, message=FALSE}
+# ==============================================================================
+#             DEEPOL Biogeography - PERMANOVA & PERMDISP Analysis
+# ==============================================================================
+#
+# For each lineage (if enabled in lineage_cfg):
+#   - Aligns data and defines `polar_group` (polar vs non-polar).
+#   - Additive PERMANOVA (adonis2) & PERMDISP (betadisper) by ocean layer/polar group.
+#   - Generates and saves dispersion boxplots.
+#   - If interaction is enabled, tests polar_group * ocean_layer, generates a 
+#     combined dispersion boxplot, and a centroid distance heatmap.
+#   - Stores statistical results in `perm_results` for the final summary table.
+# ==============================================================================
+
+perm_results <- list()
+
+for (lin in lineages) {
+  cfg <- lineage_cfg[[lin]]
+  
+  if (!isTRUE(cfg$run_permanova) && !isTRUE(cfg$run_permdisp)) {
+    message(sprintf("[SKIP] PERMANOVA and PERMDISP disabled for %s.", lin))
+    next
+  }
+  
+  msg_header(paste(lin, "- STEP 2: PERMANOVA & PERMDISP"))
+  
+  mat <- filtered_data[[lin]]$mat
+  meta_f <- filtered_data[[lin]]$meta_f
+  outdir <- output_dirs[[lin]]
+  
+  # ---- 1. Data Alignment & Setup ---------------------------------------------
+  meta_aligned <- meta_f[match(rownames(mat), meta_f$sample), , drop = FALSE]
+  stopifnot(all(meta_aligned$sample == rownames(mat)))
+  
+  meta_aligned <- meta_aligned %>%
+    mutate(
+      polar_group = case_when(
+        ocean == "Arctic Ocean"   ~ "polar",
+        ocean == "Southern Ocean" ~ "polar",
+        TRUE                      ~ "non-polar"
+      )
+    )
+  
+  dist_mat <- vegdist(mat, method = "jaccard", binary = TRUE)
+  
+  # Initialize empty objects for the report list
+  perm_result_int <- NULL
+  permtest_layer  <- NULL
+  permtest_polar  <- NULL
+  
+  # ---- 2. Additive PERMANOVA -------------------------------------------------
+  set.seed(42)
+  perm_result_add <- adonis2(
+    dist_mat ~ polar_group + ocean_layer,
+    data = meta_aligned, permutations = 999, by = "terms", na.action = na.exclude
+  )
+  print(perm_result_add)
+  
+  add_path <- file.path(outdir, paste0(lin, "_permanova_additive.csv"))
+  write.csv(as.data.frame(perm_result_add), add_path)
+  message("[OK] Saved additive PERMANOVA: ", add_path)
+  
+  # ---- 3. Additive PERMDISP & Boxplots ---------------------------------------
+  if (isTRUE(cfg$run_permdisp)) {
+    disp_layer <- betadisper(dist_mat, meta_aligned$ocean_layer)
+    disp_polar <- betadisper(dist_mat, meta_aligned$polar_group)
+    
+    permtest_layer <- permutest(disp_layer, permutations = 999)
+    permtest_polar <- permutest(disp_polar, permutations = 999)
+    
+    # Data frames for plotting
+    disp_layer_df <- tibble(
+      group = as.character(meta_aligned$ocean_layer),
+      distance = disp_layer$distances
+    ) %>% filter(!is.na(group), !is.na(distance))
+    
+    disp_polar_df <- tibble(
+      group = as.character(meta_aligned$polar_group),
+      distance = disp_polar$distances
+    ) %>% filter(!is.na(group), !is.na(distance))
+    
+    # Plot 1: Ocean layer
+    p_disp_layer <- ggplot(disp_layer_df, aes(x = group, y = distance, fill = group)) +
+      geom_boxplot(width = 0.65, alpha = 0.75, outlier.shape = 21, outlier.fill = "white") +
+      geom_jitter(width = 0.08, alpha = 0.45, size = 1.3, color = "grey25") +
+      scale_fill_manual(values = c("sunlit" = "gold2", "dark" = "deepskyblue2"), drop = TRUE) +
+      labs(
+        title = paste0(lin, " — Dispersion by Ocean Layer"),
+        subtitle = "Distance to centroid (betadisper)",
+        x = "Ocean layer", y = "Distance to centroid"
+      ) +
+      theme_minimal() + theme(legend.position = "none")
+    
+    # Plot 2: Polar group
+    p_disp_polar <- ggplot(disp_polar_df, aes(x = group, y = distance, fill = group)) +
+      geom_boxplot(width = 0.65, alpha = 0.75, outlier.shape = 21, outlier.fill = "white") +
+      geom_jitter(width = 0.08, alpha = 0.45, size = 1.3, color = "grey25") +
+      scale_fill_manual(values = c("polar" = "slateblue2", "non-polar" = "coral"), drop = TRUE) +
+      labs(
+        title = paste0(lin, " — Dispersion by Polar Group"),
+        subtitle = "Distance to centroid (betadisper)",
+        x = "Polar group", y = "Distance to centroid"
+      ) +
+      theme_minimal() + theme(legend.position = "none")
+    
+    # Combine and save (Requires 'patchwork' package which is loaded in setup)
+    print(p_disp_layer + p_disp_polar)
+    disp_box_pdf <- file.path(outdir, paste0(lin, "_betadisper_boxplots.pdf"))
+    ggsave(disp_box_pdf, plot = p_disp_layer + p_disp_polar, width = 12, height = 5, bg = "white")
+    message("[OK] Saved basic dispersion boxplots: ", disp_box_pdf)
+  }
+  
+  # ---- 4. Interaction PERMANOVA/PERMDISP & Heatmap ---------------------------
+  if (isTRUE(cfg$run_permdisp_interaction)) {
+    meta_aligned$combined_group <- interaction(meta_aligned$polar_group, meta_aligned$ocean_layer, drop = TRUE)
+    group_sizes <- table(meta_aligned$combined_group)
+    valid_groups <- names(group_sizes[group_sizes >= 2])
+    
+    if (length(valid_groups) < 2) {
+      warning(sprintf("[%s] Fewer than 2 combined groups with >=2 samples; skipping interaction.", lin))
+    } else {
+      keep <- meta_aligned$combined_group %in% valid_groups
+      meta_i <- meta_aligned[keep, , drop = FALSE]
+      dist_i <- as.dist(as.matrix(dist_mat)[keep, keep])
+      
+      # Interaction PERMANOVA
+      perm_result_int <- adonis2(
+        dist_i ~ polar_group * ocean_layer,
+        data = meta_i, permutations = 999, by = "terms", na.action = na.exclude
+      )
+      
+      int_path <- file.path(outdir, paste0(lin, "_permanova_interaction.csv"))
+      write.csv(as.data.frame(perm_result_int), int_path)
+      
+      # Interaction PERMDISP
+      disp_combined <- betadisper(dist_i, group = droplevels(meta_i$combined_group))
+      
+      dist_df <- data.frame(
+        Distance = disp_combined$distances,
+        Region   = meta_i$polar_group,
+        Layer    = meta_i$ocean_layer
+      )
+      
+      # Combined Boxplot
+      p_disp_box <- ggplot(dist_df, aes(x = Region, y = Distance, fill = Layer)) +
+        geom_boxplot(outlier.shape = 21, outlier.fill = "white", alpha = 0.6) +
+        scale_fill_manual(values = c("sunlit" = "gold2", "dark" = "deepskyblue2")) +
+        labs(
+          title = paste0(lin, " — Microbial Community Dispersion"),
+          subtitle = "Distance to Group Centroid (Jaccard Index)",
+          x = "Oceanic Region", y = "Distance to Centroid"
+        ) +
+        theme_minimal() + theme(panel.grid.major.y = element_line(color = "grey90"))
+      
+      print(p_disp_box)
+      disp_box_path <- file.path(outdir, paste0(lin, "_dispersion_boxplot.pdf"))
+      ggsave(disp_box_path, plot = p_disp_box, width = 7, height = 5, bg = "white")
+      
+      # Centroid Distance Heatmap
+      centroid_dist_mat <- as.matrix(dist(disp_combined$centroids))
+      dist_long <- melt(centroid_dist_mat)
+      colnames(dist_long) <- c("Group1", "Group2", "Distance")
+      
+      lvls <- rownames(disp_combined$centroids)
+      dist_long$Group1 <- factor(dist_long$Group1, levels = lvls)
+      dist_long$Group2 <- factor(dist_long$Group2, levels = lvls)
+      
+      dist_long_filtered <- subset(dist_long, as.numeric(Group1) > as.numeric(Group2))
+      
+      p_centroid_heat <- ggplot(dist_long_filtered, aes(x = Group1, y = Group2, fill = Distance)) +
+        geom_tile(color = "white", linewidth = 0.5) +
+        geom_text(aes(label = round(Distance, 3)), color = "black") +
+        scale_fill_gradient(low = "grey90", high = "steelblue", name = "Jaccard\nDistance") +
+        theme_minimal() +
+        labs(
+          title = paste0(lin, " — Community Centroid Distances"),
+          subtitle = "Comparing layer stratification and regional shifts",
+          x = NULL, y = NULL
+        ) +
+        theme(
+          axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 10, color = "black"),
+          axis.text.y = element_text(size = 10, color = "black"),
+          panel.grid = element_blank(),
+          plot.title = element_text(hjust = 0.5, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5)
+        ) +
+        coord_fixed()
+      
+      print(p_centroid_heat)
+      heat_path <- file.path(outdir, paste0(lin, "_centroid_distances_heatmap.pdf"))
+      ggsave(heat_path, plot = p_centroid_heat, width = 7, height = 6, bg = "white")
+      message("[OK] Saved interaction plots: ", disp_box_path, " & ", heat_path)
+    }
+  }
+  
+  # ---- 5. Store Data for Global Summary --------------------------------------
+  perm_results[[lin]] <- list(
+    permanova_add  = perm_result_add,
+    permanova_int  = perm_result_int,
+    permtest_layer = permtest_layer,
+    permtest_polar = permtest_polar
+  )
+}
+```
+
+## 8. Phylogenetic Niche Traits
+
+```{r phylogenetic-traits, fig.width=14, fig.height=10, warning=FALSE, message=FALSE}
+# ==============================================================================
+#             DEEPOL Biogeography - Phylogenetic Niche Traits
+# ==============================================================================
+#
+# For each lineage (if enabled and a tree file is available):
+#   - Calculates niche specialization (Polarity and Ocean Layer) per ASV based
+#     on the specialist_threshold defined in lineage_cfg.
+#   - Maps these categorical traits and overall occupancy onto the phylogeny.
+#   - Generates a ggtree plot with multiple facet panels.
+#   - Saves the plot, the detailed trait table, and a summary table.
+#   - Stores summaries in `all_trait_summaries` for global reporting.
+# ==============================================================================
+
+# ---- Local Helper Functions for Trait Prep and Plotting ----------------------
+prep_trait_data_deepol_pa <- function(abundance_long, meta_f, specialist_threshold = 0.70) {
+  dat <- abundance_long %>%
+    filter(nreads > 0) %>%
+    distinct(sample, amplicon) %>%
+    inner_join(meta_f %>% select(sample, ocean, ocean_layer), by = "sample") %>%
+    mutate(
+      polarity = ifelse(ocean %in% c("Arctic Ocean", "Southern Ocean"), "Polar", "Non-Polar"),
+      layer = case_when(
+        ocean_layer %in% c("sunlit", "Sunlit") ~ "Sunlit",
+        ocean_layer %in% c("dark", "Dark") ~ "Dark",
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    filter(!is.na(layer))
+
+  occ <- dat %>% count(amplicon, name = "Occupancy")
+
+  pol <- dat %>%
+    count(amplicon, polarity, name = "n_samples") %>%
+    pivot_wider(names_from = polarity, values_from = n_samples, values_fill = 0) %>%
+    mutate(
+      Polar = coalesce(Polar, 0L),
+      `Non-Polar` = coalesce(`Non-Polar`, 0L),
+      total_pol = Polar + `Non-Polar`,
+      prop_polar = if_else(total_pol > 0, Polar / total_pol, NA_real_),
+      Polarity_class = case_when(
+        is.na(prop_polar) ~ "Unknown",
+        prop_polar >= specialist_threshold ~ "Polar specialist",
+        prop_polar <= (1 - specialist_threshold) ~ "Non-Polar specialist",
+        TRUE ~ "Generalist"
+      )
+    ) %>%
+    select(amplicon, prop_polar, Polarity_class, n_polar = Polar, n_non_polar = `Non-Polar`)
+
+  lay <- dat %>%
+    count(amplicon, layer, name = "n_samples") %>%
+    pivot_wider(names_from = layer, values_from = n_samples, values_fill = 0) %>%
+    mutate(
+      Sunlit = coalesce(Sunlit, 0L),
+      Dark = coalesce(Dark, 0L),
+      total_layer = Sunlit + Dark,
+      prop_sunlit = if_else(total_layer > 0, Sunlit / total_layer, NA_real_),
+      Layer_class = case_when(
+        is.na(prop_sunlit) ~ "Unknown",
+        prop_sunlit >= specialist_threshold ~ "Sunlit specialist",
+        prop_sunlit <= (1 - specialist_threshold) ~ "Dark specialist",
+        TRUE ~ "Generalist"
+      )
+    ) %>%
+    select(amplicon, prop_sunlit, Layer_class, n_sunlit = Sunlit, n_dark = Dark)
+
+  out <- occ %>%
+    rename(label = amplicon) %>%
+    left_join(pol %>% rename(label = amplicon), by = "label") %>%
+    left_join(lay %>% rename(label = amplicon), by = "label") %>%
+    mutate(
+      Polarity_class = replace_na(Polarity_class, "Unknown"),
+      Layer_class = replace_na(Layer_class, "Unknown"),
+      Occupancy = replace_na(Occupancy, 0L)
+    )
+  return(out)
+}
+
+plot_rectangular_lineage_deepol <- function(tree, trait_data, title_name) {
+  all_labels <- tibble(label = as.character(tree$tip.label))
+
+  pol_levels <- c("Polar specialist", "Non-Polar specialist", "Generalist", "Unknown")
+  pol_colours <- c(
+    "Polar specialist"     = "slateblue2",
+    "Non-Polar specialist" = "coral",
+    "Generalist"           = "yellowgreen",
+    "Unknown"              = "grey85"
+  )
+  layer_levels <- c("Sunlit specialist", "Dark specialist", "Generalist", "Unknown")
+  layer_colours <- c(
+    "Sunlit specialist" = "gold2",
+    "Dark specialist"   = "deepskyblue2",
+    "Generalist"        = "yellowgreen",
+    "Unknown"           = "grey85"
+  )
+  occ_bar_colour <- "#555B6E"
+
+  trait_plot <- trait_data %>%
+    filter(label %in% tree$tip.label) %>%
+    mutate(
+      label = as.character(label),
+      Polarity_class = dplyr::coalesce(as.character(Polarity_class), "Unknown"),
+      Layer_class = dplyr::coalesce(as.character(Layer_class), "Unknown"),
+      Occupancy = dplyr::coalesce(as.numeric(Occupancy), 0)
+    )
+
+  p <- ggtree(tree, layout = "rectangular", size = 0.4) +
+    theme_tree2() +
+    labs(title = title_name)
+
+  pol_facet_df <- all_labels %>%
+    left_join(trait_plot %>% select(label, Polarity_class), by = "label") %>%
+    mutate(
+      Polarity_for_facet = dplyr::coalesce(as.character(Polarity_class), "Unknown"),
+      Polarity_fill = factor(Polarity_for_facet, levels = pol_levels)
+    ) %>%
+    select(label, Polarity_fill)
+
+  p <- p + ggnewscale::new_scale_fill() +
+    ggtree::geom_facet(
+      panel = "Polarity Niche", data = pol_facet_df,
+      geom = ggplot2::geom_tile, mapping = aes(x = 1, fill = Polarity_fill), width = 0.8
+    ) +
+    scale_fill_manual(name = "Polarity Niche", values = pol_colours, drop = FALSE)
+
+  layer_facet_df <- all_labels %>%
+    left_join(trait_plot %>% select(label, Layer_class), by = "label") %>%
+    mutate(Layer_fill = factor(dplyr::coalesce(Layer_class, "Unknown"), levels = layer_levels)) %>%
+    select(label, Layer_fill)
+
+  p <- p + ggnewscale::new_scale_fill() +
+    ggtree::geom_facet(
+      panel = "Ocean Layer Niche", data = layer_facet_df,
+      geom = ggplot2::geom_tile, mapping = aes(x = 1, fill = Layer_fill), width = 0.8
+    ) +
+    scale_fill_manual(name = "Ocean Layer Niche", values = layer_colours, drop = FALSE)
+
+  occ_facet_df <- all_labels %>%
+    left_join(trait_plot %>% select(label, Occupancy), by = "label") %>%
+    mutate(Occupancy_panel = dplyr::coalesce(as.numeric(Occupancy), 0)) %>%
+    select(label, Occupancy_panel)
+
+  p <- p +
+    ggtree::geom_facet(
+      panel = "Occupancy (Niche Breadth)", data = occ_facet_df,
+      geom = ggplot2::geom_col, mapping = aes(x = Occupancy_panel),
+      stat = "identity", orientation = "y", fill = occ_bar_colour, width = 0.75
+    )
+
+  p <- ggtree::facet_widths(
+    p, widths = c(tree = 3, "Polarity Niche" = 0.8, "Ocean Layer Niche" = 0.8, "Occupancy (Niche Breadth)" = 1.7)
+  )
+  return(p)
+}
+
+# ---- Analysis Execution ------------------------------------------------------
+for (lin in lineages) {
+  cfg <- lineage_cfg[[lin]]
+  outdir <- output_dirs[[lin]]
+  
+  if (!isTRUE(cfg$run_phylo_driver_specialization)) {
+    message(sprintf("[SKIP] Phylogenetic traits disabled in config for %s.", lin))
+    next
+  }
+  
+  tree_path <- tree_paths[[lin]]
+  if (is.null(tree_path) || is.na(tree_path) || !file.exists(tree_path)) {
+    warning(sprintf("[%s] Tree file missing or invalid. Skipping phylogeny section.", lin))
+    next
+  }
+  
+  msg_header(paste(lin, "- Phylogenetic Niche Traits"))
+  
+  # Load specific abundance data and metadata
+  abundance_file <- here("data", "edited", lin, paste0(lin, "_filtered_abundance.csv"))
+  abundance_long <- read.csv(abundance_file, stringsAsFactors = FALSE)
+  meta_f <- filtered_data[[lin]]$meta_f
+  
+  thr <- cfg$specialist_threshold %||% specialist_threshold_default
+  
+  # Prepare Trait Data
+  trait_data <- prep_trait_data_deepol_pa(
+    abundance_long = abundance_long,
+    meta_f = meta_f,
+    specialist_threshold = thr
+  )
+  
+  # Verify data integrity
+  required_cols <- c("label", "Polarity_class", "Layer_class", "Occupancy")
+  if (!all(required_cols %in% names(trait_data))) {
+    stop(paste("trait_data missing required columns:", paste(setdiff(required_cols, names(trait_data)), collapse = ", ")))
+  }
+  
+  # Load Tree and Plot
+  tree <- read.tree(tree_path)
+  p_phylo_cat <- plot_rectangular_lineage_deepol(
+    tree = tree,
+    trait_data = trait_data,
+    title_name = paste0(lin, " — Categorical niche traits (threshold=", thr, ")")
+  )
+  
+  print(p_phylo_cat)
+  
+  # Save Outputs
+  phylo_pdf <- file.path(outdir, paste0(lin, "_phylogeny_categorical_traits.pdf"))
+  ggsave(phylo_pdf, plot = p_phylo_cat, width = 14, height = 10, bg = "white")
+  message("[OK] Saved plot: ", phylo_pdf)
+  
+  trait_csv <- file.path(outdir, paste0(lin, "_phylogeny_trait_table.csv"))
+  write.csv(trait_data, trait_csv, row.names = FALSE)
+  message("[OK] Saved trait table: ", trait_csv)
+  
+  trait_summary <- make_trait_summary(
+    trait_data = trait_data,
+    lineage = lin,
+    threshold = thr
+  )
+  
+  trait_summary_csv <- file.path(outdir, paste0(lin, "_phylogeny_trait_summary.csv"))
+  write.csv(trait_summary, trait_summary_csv, row.names = FALSE)
+  message("[OK] Saved lineage summary: ", trait_summary_csv)
+  
+  # Store for global reporting
+  all_trait_summaries[[lin]] <- trait_summary
+}
+```
+
+## 9. Global Summary & Auto-Report Generation
+
+```{r global-summary, warning=FALSE, message=FALSE}
+# ==============================================================================
+#             DEEPOL Biogeography - Global Summary & Auto-Report
+# ==============================================================================
+#
+# This final chunk:
+#   1. Defines the helper to extract stats from the previous modular steps.
+#   2. Iterates through all lineages to build a comprehensive data frame.
+#   3. Exports a Master Summary CSV containing:
+#      - Sample/ASV counts
+#      - dbRDA R2 and p-values (Environment vs Geography)
+#      - PERMANOVA R2 and p-values (Polarity and Layer)
+#      - PERMDISP p-values (to check for dispersion bias)
+#      - Niche Trait percentages (Specialists vs Generalists)
+# ==============================================================================
+
+# ---- 1. Helper Function to Build Report Rows ---------------------------------
+build_lineage_report_row <- function(lin, dbrda_res, perm_res, trait_sum, n_samples, n_asvs) {
+  
+  # Extract dbRDA / Varpart stats
+  # Use tryCatch or null checks in case an analysis was skipped
+  env_r2  <- if(!is.null(dbrda_res$vp)) dbrda_res$vp$part$indfract$Adj.R.squared[1] else NA
+  geo_r2  <- if(!is.null(dbrda_res$vp)) dbrda_res$vp$part$indfract$Adj.R.squared[2] else NA
+  shd_r2  <- if(!is.null(dbrda_res$vp)) dbrda_res$vp$part$indfract$Adj.R.squared[3] else NA
+  
+  # Extract PERMANOVA (Additive model) stats
+  # We look for 'polar_group' and 'ocean_layer' terms
+  perm_add <- perm_res$permanova_add
+  p_pol_r2 <- if(!is.null(perm_add)) perm_add["polar_group", "R2"] else NA
+  p_pol_p  <- if(!is.null(perm_add)) perm_add["polar_group", "Pr(>F)"] else NA
+  p_lay_r2 <- if(!is.null(perm_add)) perm_add["ocean_layer", "R2"] else NA
+  p_lay_p  <- if(!is.null(perm_add)) perm_add["ocean_layer", "Pr(>F)"] else NA
+  
+  # Extract PERMDISP p-values
+  disp_lay_p <- if(!is.null(perm_res$permtest_layer)) perm_res$permtest_layer$tab$`Pr(>F)`[1] else NA
+  disp_pol_p <- if(!is.null(perm_res$permtest_polar)) perm_res$permtest_polar$tab$`Pr(>F)`[1] else NA
+
+  # Extract Niche Trait percentages (if summary exists)
+  # We'll pull the % of Polar Specialists and Sunlit Specialists
+  pol_spec_pct <- if(!is.null(trait_sum)) trait_sum$Percentage[trait_sum$Class == "Polar specialist"] else NA
+  sun_spec_pct <- if(!is.null(trait_sum)) trait_sum$Percentage[trait_sum$Class == "Sunlit specialist"] else NA
+
+  tibble(
+    lineage           = lin,
+    samples           = n_samples,
+    asvs              = n_asvs,
+    varpart_env_adjR2 = env_r2,
+    varpart_geo_adjR2 = geo_r2,
+    varpart_shared    = shd_r2,
+    permanova_polar_R2 = p_pol_r2,
+    permanova_polar_p  = p_pol_p,
+    permanova_layer_R2 = p_lay_r2,
+    permanova_layer_p  = p_lay_p,
+    permdisp_layer_p   = disp_lay_p,
+    permdisp_polar_p   = disp_pol_p,
+    pct_polar_spec     = pol_spec_pct,
+    pct_sunlit_spec    = sun_spec_pct
+  )
+}
+
+# ---- 2. Aggregate Results ----------------------------------------------------
+report_list <- list()
+
+for (lin in lineages) {
+  # Retrieve data from global lists populated in previous chunks
+  dbrda_res <- dbrda_results[[lin]]
+  perm_res  <- perm_results[[lin]]
+  trait_sum <- all_trait_summaries[[lin]]
+  
+  # Get counts from the filtered data list
+  n_samples <- nrow(filtered_data[[lin]]$mat)
+  n_asvs    <- ncol(filtered_data[[lin]]$mat)
+  
+  report_list[[lin]] <- build_lineage_report_row(
+    lin, dbrda_res, perm_res, trait_sum, n_samples, n_asvs
+  )
+}
+
+# Combine into one master table
+master_report <- bind_rows(report_list)
+
+# ---- 3. Format and Export ----------------------------------------------------
+# Round numeric values for readability in the console
+master_report_fmt <- master_report %>%
+  mutate(across(where(is.numeric), ~ round(.x, 4)))
+
+msg_header("FINAL GLOBAL SUMMARY")
+print(master_report_fmt)
+
+# Save to the root output directory
+final_csv_path <- file.path(output_root, "DEEPOL_biogeography_master_summary.csv")
+write.csv(master_report_fmt, final_csv_path, row.names = FALSE)
+
+message("\n[FINISHED] All analyses complete.")
+message("[OUTPUT] Master summary saved to: ", final_csv_path)
+```
