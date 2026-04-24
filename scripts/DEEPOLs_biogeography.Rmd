@@ -486,7 +486,45 @@ message("[Summary saved] ", summary_outfile)
 ```
 
 
-### 2.3 Occurrence by Habitat / Size Fraction
+### 2.3 ASV-level abundance summary statistics
+
+```{r asv-abundance-summary, warning=FALSE, message=FALSE}
+# ==============================================================================
+# DEEPOL Biogeography - ASV abundance summary statistics (per-ASV)
+# ==============================================================================
+
+asv_abundance_summary <- purrr::map_dfr(lineages, function(lin) {
+  tab <- abundance_tables[[lin]]
+  
+  # Calculate per-ASV statistics across all samples
+  asv_summary <- tab %>%
+    filter(!is.na(amplicon)) %>%
+    group_by(amplicon) %>%
+    summarise(
+      lineage = lin,
+      mean_nreads = mean(nreads, na.rm = TRUE),
+      sd_nreads = sd(nreads, na.rm = TRUE),
+      mean_rel_abund = mean(rel_abundance_pct, na.rm = TRUE),
+      sd_rel_abund = sd(rel_abundance_pct, na.rm = TRUE),
+      n_samples = n(),
+      .groups = "drop"
+    )
+    
+  return(asv_summary)
+})
+
+# Show in notebook (head)
+print(head(asv_abundance_summary))
+
+# Save CSV in results root
+asv_summary_outfile <- file.path(output_root, "DEEPOL_ASV_abundance_summary.csv")
+write.csv(asv_abundance_summary, asv_summary_outfile, row.names = FALSE)
+
+message("[Summary saved] ", asv_summary_outfile)
+```
+
+
+### 2.4 Occurrence by Habitat / Size Fraction
 
 ```{r occurrence-barplots, fig.width=9, fig.height=5, warning=FALSE, message=FALSE}
 # ==============================================================================
