@@ -100,6 +100,7 @@ ocean_guides <- guides(
 envfit_p_cutoff <- 0.05                # p-value cutoff for envfit
 specialist_threshold_default <- 0.70   # Default niche specialist threshold
 all_trait_summaries <- list()          # Holds trait summary tables
+all_trait_data      <- list()          # Holds per-ASV trait data (label, Polarity_class, Layer_class, Occupancy)
 
 # Per-lineage analysis settings for modularity
 lineage_cfg <- list(
@@ -1430,6 +1431,7 @@ for (lin in lineages) {
   
   # Store for global reporting
   all_trait_summaries[[lin]] <- trait_summary
+  all_trait_data[[lin]]      <- trait_data
 }
 ```
 
@@ -1530,4 +1532,71 @@ write.csv(master_report_fmt, final_csv_path, row.names = FALSE)
 
 message("\n[FINISHED] All analyses complete.")
 message("[OUTPUT] Master summary saved to: ", final_csv_path)
+```
+
+## 10. ASV-Level Abundance Summary with Phylogenetic Traits
+
+```{r asv-abundance-summary, warning=FALSE, message=FALSE}
+# ==============================================================================
+#         DEEPOL Biogeography - ASV-Level Abundance Summary
+# ==============================================================================
+#
+# For each lineage, compute per-ASV summary statistics (mean and SD of read
+# counts and relative abundance, plus the number of samples the ASV was
+# detected in) and join the phylogenetic niche traits calculated in section 8
+# (Polarity_class, Layer_class, Occupancy).
+#
+# Trait columns are NA for lineages where the phylogenetic traits section was
+# skipped (e.g., missing tree file or disabled in lineage_cfg).
+#
+# Output: DEEPOL_ASV_abundance_summary.csv
+# ==============================================================================
+
+asv_abundance_summary <- purrr::map_dfr(lineages, function(lin) {
+  tab <- abundance_tables[[lin]]
+
+  # Per-ASV abundance statistics (only positive-read rows)
+  asv_stats <- tab %>%
+    filter(!is.na(amplicon), nreads > 0) %>%
+    group_by(amplicon) %>%
+    summarise(
+      mean_nreads    = mean(nreads,           na.rm = TRUE),
+      sd_nreads      = sd(nreads,             na.rm = TRUE),
+      mean_rel_abund = mean(rel_abundance_pct, na.rm = TRUE),
+      sd_rel_abund   = sd(rel_abundance_pct,  na.rm = TRUE),
+      n_samples      = n(),
+      .groups = "drop"
+    ) %>%
+    mutate(lineage = lin)
+
+  # Attach phylogenetic trait data when available
+  trait_df <- all_trait_data[[lin]]
+  if (!is.null(trait_df)) {
+    trait_df <- trait_df %>%
+      select(label, Polarity_class, Layer_class, Occupancy) %>%
+      rename(amplicon = label)
+    asv_stats <- asv_stats %>%
+      left_join(trait_df, by = "amplicon")
+  } else {
+    asv_stats <- asv_stats %>%
+      mutate(Polarity_class = NA_character_,
+             Layer_class    = NA_character_,
+             Occupancy      = NA_real_)
+  }
+
+  asv_stats %>%
+    select(amplicon, lineage, mean_nreads, sd_nreads, mean_rel_abund, sd_rel_abund,
+           n_samples, Polarity_class, Layer_class, Occupancy)
+})
+
+# Show preview
+msg_header("ASV ABUNDANCE SUMMARY (with phylogenetic traits)")
+print(head(asv_abundance_summary, 10))
+cat(sprintf("\n[INFO] Total ASVs summarised: %d across %d lineage(s)\n",
+            nrow(asv_abundance_summary), dplyr::n_distinct(asv_abundance_summary$lineage)))
+
+# Export
+asv_summary_csv <- file.path(output_root, "DEEPOL_ASV_abundance_summary.csv")
+write.csv(asv_abundance_summary, asv_summary_csv, row.names = FALSE)
+message("[OUTPUT] ASV abundance summary saved to: ", asv_summary_csv)
 ```
